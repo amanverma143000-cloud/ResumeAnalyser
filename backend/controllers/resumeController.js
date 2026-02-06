@@ -6,67 +6,56 @@ const resumeParser = require('../utils/resumeParser');
 // @access  Public
 const uploadResume = async (req, res, next) => {
   try {
+    console.log('📤 Upload request received');
+    console.log('Request file:', req.file);
+    console.log('Request body:', req.body);
+    
     if (!req.file) {
+      console.log('❌ No file uploaded');
       return res.status(400).json({
         success: false,
         error: 'Please upload a PDF resume file'
       });
     }
 
-    // Parse resume using enhanced AI/NLP logic
+    console.log('✅ File received:', {
+      filename: req.file.originalname,
+      size: req.file.size,
+      mimetype: req.file.mimetype
+    });
+
+    // Check file size (10MB max)
+    if (req.file.size > 10 * 1024 * 1024) {
+      return res.status(400).json({
+        success: false,
+        error: 'File size exceeds 10MB limit'
+      });
+    }
+
+    // Parse resume using Groq AI
+    console.log('🤖 Parsing resume with Groq AI...');
     const parseResult = await resumeParser.parseResume(req.file.buffer);
     
     if (!parseResult.success) {
+      console.log('❌ Parse failed:', parseResult.error);
       return res.status(400).json({
         success: false,
-        error: 'Failed to parse resume: ' + parseResult.error
+        error: parseResult.error,
+        missingFields: parseResult.missingFields || []
       });
     }
 
-    const extractedData = parseResult.data;
+    const resumeData = parseResult.data;
+    console.log('✅ Parse successful:', resumeData);
 
-    // ROBUST 3-LAYER VALIDATION SYSTEM
-    // Layer 1: AI extraction (already done)
-    // Layer 2: Fallback text extraction for missing fields  
-    // Layer 3: Final validation with enhanced data
-    const robustValidation = resumeParser.validateRequiredFieldsRobust(extractedData, parseResult.rawText);
-    
-    if (!robustValidation.isValid) {
-      const missingFieldsText = robustValidation.missingFields.map(field => {
-        switch(field) {
-          case 'name': return 'Name';
-          case 'email': return 'Email';
-          case 'education': return 'Education';
-          default: return field;
-        }
-      }).join(', ');
-      
-      console.log('❌ Resume rejected - truly missing fields:', robustValidation.missingFields);
-      
-      return res.status(400).json({
-        success: false,
-        error: `This resume is not uploadable. Missing: ${missingFieldsText}`,
-        missingFields: robustValidation.missingFields
-      });
-    }
-
-    // Use enhanced data from robust validation (includes fallback extractions)
-    const finalData = robustValidation.enhancedData;
-    
-    console.log('✅ Resume accepted - final data:', {
-      name: finalData.name,
-      email: finalData.email,
-      education: finalData.education ? 'Present' : 'Missing'
-    });
-
-    // Save only valid resumes to database
+    // Save to database
     const resume = new Resume({
-      name: finalData.name,
-      email: finalData.email,
-      phone: finalData.phone || null,
-      role: finalData.role || null,
-      summary: finalData.summary || null,
-      education: finalData.education,
+      name: resumeData.name,
+      email: resumeData.email,
+      phone: resumeData.phone,
+      role: resumeData.role,
+      summary: resumeData.summary,
+      education: resumeData.education,
       fileName: req.file.originalname
     });
 
@@ -88,7 +77,11 @@ const uploadResume = async (req, res, next) => {
     });
 
   } catch (error) {
-    next(error);
+    console.error('Upload error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error: ' + error.message
+    });
   }
 };
 
