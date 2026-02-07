@@ -2,6 +2,16 @@ const pdfParse = require('pdf-parse');
 const groqService = require('./groqService');
 
 class ResumeParser {
+  constructor() {
+    // Patterns for fallback extraction
+    this.patterns = {
+      email: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
+      phone: /(\+?1?[-\s]?)?\(?\d{3}\)?[-\s]?\d{3}[-\s]?\d{4}|\+\d{1,3}[-\s]?\d{1,14}/g,
+      name: /^([A-Z][a-zA-Z'\-\s]+)$/m,
+      education: /(bachelor|master|phd|doctorate|degree|university|college|education|b\.?tech|m\.?tech|b\.?sc|m\.?sc|mba|bba|diploma|certification)/i
+    };
+  }
+
   async parseResume(buffer) {
     try {
       // Extract text from PDF
@@ -14,34 +24,34 @@ class ResumeParser {
         throw new Error('Resume content is too short or unreadable');
       }
 
-      // Use Groq AI to extract resume data
+      // Use Groq AI to extract resume data (if available). If AI fails
+      // we fall back to the robust local extraction below so the app
+      // continues to work even when the provider is unavailable.
       const groqResult = await groqService.analyzeResume(text);
-      
-      if (!groqResult.success) {
-        throw new Error('Failed to analyze resume with AI: ' + groqResult.error);
+
+      let extractedData = {};
+      if (groqResult && groqResult.success && groqResult.data) {
+        extractedData = groqResult.data;
+      } else {
+        console.warn('⚠️ Groq unavailable or failed:', groqResult && groqResult.error);
+        extractedData = {}; // let fallback logic populate fields
       }
 
-      const extractedData = groqResult.data;
+      // Apply robust 3-layer validation which includes AI + fallback
+      const validationResult = this.validateRequiredFieldsRobust(extractedData, text);
 
-      // Validate required fields
-      const validation = this.validateRequiredFields(extractedData);
-      
-      if (!validation.isValid) {
-        const missingFields = validation.missingFields.map(f => {
-          const names = { 'name': 'Name', 'email': 'Email', 'education': 'Education' };
-          return names[f] || f;
-        }).join(', ');
-
+      if (!validationResult.isValid) {
+        // Return missing fields along with raw text so frontend can show helpful message
         return {
           success: false,
-          error: `Missing required fields: ${missingFields}`,
-          missingFields: validation.missingFields,
+          error: `Missing required fields: ${validationResult.missingFields.join(', ')}`,
+          missingFields: validationResult.missingFields,
           rawText: text
         };
       }
 
-      // Clean and format data
-      const cleanedData = this.cleanExtractedData(extractedData);
+      // Use the enhanced data (AI + fallback) for the response
+      const cleanedData = this.cleanExtractedData(validationResult.enhancedData || extractedData);
 
       return {
         success: true,
@@ -87,6 +97,131 @@ class ResumeParser {
       role: (data.role && data.role !== 'null') ? data.role.trim() : null,
       summary: (data.summary && data.summary !== 'null') ? data.summary.trim() : null,
       education: (data.education && data.education !== 'null') ? data.education.trim() : null
+    };
+  }
+
+  formatName(name) {
+    return name.split(/\s+/)
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+  }
+
+  fallbackExtractRequiredFields(text, aiData) {
+    console.log('🔍 LAYER 2: Fallback extraction for missing fields');
+    const fallbackData = { ...aiData };
+    
+    // Fallback email extraction
+    if (!fallbackData.email) {
+      const emailMatch = text.match(this.patterns.email);
+      if (emailMatch) {
+        fallbackData.email = emailMatch[0].toLowerCase().trim();
+        console.log('📧 Fallback found email:', fallbackData.email);
+      }
+    }
+    
+    // Fallback name extraction - first meaningful line
+    if (!fallbackData.name) {
+      const lines = text.split('\n').filter(line => line.trim());
+      for (let i = 0; i < Math.min(8, lines.length); i++) {
+        const line = lines[i].trim();
+        
+        // Skip obvious non-name lines
+        if (line.toLowerCase().includes('resume') || 
+            line.toLowerCase().includes('cv') ||
+            this.patterns.email.test(line) ||
+            this.patterns.phone.test(line) ||
+            line.includes('@') ||
+            /\d{5}/.test(line)) {
+          continue;
+        }
+        
+        // Check if line could be a name (2-4 words, starts with capitals)
+        const words = line.split(/\s+/);
+        if (words.length >= 2 && words.length <= 4 && line.length > 5 && line.length < 50) {
+          const couldBeName = words.every(word => 
+            /^[A-Z]/.test(word) && word.length > 1 && !/\d/.test(word)
+          );
+          if (couldBeName) {
+            fallbackData.name = this.formatName(line);
+            console.log('👤 Fallback found name:', fallbackData.name);
+            break;
+          }
+        }
+      }
+    }
+    
+    // Fallback education extraction - keyword-based
+    if (!fallbackData.education) {
+      const educationKeywords = [
+        'degree', 'bachelor', 'master', 'phd', 'doctorate', 'diploma',
+        'b.tech', 'btech', 'm.tech', 'mtech', 'b.sc', 'bsc', 'm.sc', 'msc',
+        'mba', 'bba', 'bca', 'mca', 'university', 'college', 'school',
+        'institute', 'certification', 'graduate', 'undergraduate'
+      ];
+      
+      const lowerText = text.toLowerCase();
+      
+      // Check if any education keywords exist
+      const hasEducationKeywords = educationKeywords.some(keyword => 
+        lowerText.includes(keyword)
+      );
+      
+      if (hasEducationKeywords) {
+        // Try to extract education section or line with keywords
+        const lines = text.split('\n');
+        for (const line of lines) {
+          const lowerLine = line.toLowerCase();
+          if (educationKeywords.some(keyword => lowerLine.includes(keyword)) && 
+              line.trim().length > 10 && line.trim().length < 200) {
+            fallbackData.education = line.trim();
+            console.log('🎓 Fallback found education:', fallbackData.education);
+            break;
+          }
+        }
+        
+        // If no specific line found but keywords exist, mark as present
+        if (!fallbackData.education) {
+          fallbackData.education = 'Education information found in resume';
+          console.log('🎓 Fallback detected education keywords in text');
+        }
+      }
+    }
+    
+    return fallbackData;
+  }
+
+  validateRequiredFieldsRobust(aiData, rawText) {
+    console.log('🔍 LAYER 1: AI extracted data:', {
+      name: aiData.name ? 'Found' : 'Missing',
+      email: aiData.email ? 'Found' : 'Missing', 
+      education: aiData.education ? 'Found' : 'Missing'
+    });
+    
+    // LAYER 2: Apply fallback extraction for missing fields
+    const enhancedData = this.fallbackExtractRequiredFields(rawText, aiData);
+    
+    console.log('🔍 LAYER 2: After fallback extraction:', {
+      name: enhancedData.name ? 'Found' : 'Missing',
+      email: enhancedData.email ? 'Found' : 'Missing',
+      education: enhancedData.education ? 'Found' : 'Missing'
+    });
+    
+    // LAYER 3: Final validation - check what's actually missing
+    const required = ['name', 'email', 'education'];
+    const actuallyMissing = required.filter(field => {
+      const value = enhancedData[field];
+      return !value || (typeof value === 'string' && value.trim() === '') || value === null;
+    });
+    
+    console.log('🔍 LAYER 3: Final validation result:', {
+      isValid: actuallyMissing.length === 0,
+      missingFields: actuallyMissing
+    });
+    
+    return {
+      isValid: actuallyMissing.length === 0,
+      missingFields: actuallyMissing,
+      enhancedData: enhancedData
     };
   }
 }
