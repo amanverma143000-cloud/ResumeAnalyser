@@ -13,7 +13,7 @@ const HistoryPage = () => {
     resumeHistory, 
     error, 
     currentPage, 
-    totalPages, 
+  
     totalResumes,
     dispatch 
   } = useApp();
@@ -70,11 +70,7 @@ const HistoryPage = () => {
     }
   }, [resumeHistory, searchTerm]);
 
-  const handlePageChange = (page) => {
-    if (page >= 1 && page <= totalPages && page !== currentPage) {
-      fetchResumeHistory(page);
-    }
-  };
+ 
 
   const handleRetry = () => {
     fetchResumeHistory(currentPage);
