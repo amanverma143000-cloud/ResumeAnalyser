@@ -20,22 +20,32 @@ api.interceptors.response.use(
   }
 );
 
+// Returns existing userId from localStorage or creates and stores a new one
+export const getOrCreateUserId = () => {
+  let userId = localStorage.getItem('resumeAnalyzerUserId');
+  if (!userId) {
+    userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
+    localStorage.setItem('resumeAnalyzerUserId', userId);
+  }
+  return userId;
+};
+
 export const resumeAPI = {
   uploadResume: async (file) => {
     const formData = new FormData();
     formData.append('resume', file);
-    
+    // Attach userId so backend can scope the record to this browser session
+    formData.append('userId', getOrCreateUserId());
+
     const response = await api.post('/upload-resume', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
+      headers: { 'Content-Type': 'multipart/form-data' },
     });
-    
     return response.data;
   },
 
   getResumeHistory: async (page = 1, limit = 10) => {
-    const response = await api.get(`/resume-history?page=${page}&limit=${limit}`);
+    const userId = getOrCreateUserId();
+    const response = await api.get(`/resume-history?page=${page}&limit=${limit}&userId=${userId}`);
     return response.data;
   },
 

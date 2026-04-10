@@ -37,6 +37,12 @@ const resumeSchema = new mongoose.Schema({
   fileName: {
     type: String,
     required: true
+  },
+  // Anonymous browser-based user identifier (stored in localStorage)
+  userId: {
+    type: String,
+    required: true,
+    index: true
   }
 }, {
   timestamps: true
@@ -45,5 +51,6 @@ const resumeSchema = new mongoose.Schema({
 // Index for faster queries
 resumeSchema.index({ uploadDate: -1 });
 resumeSchema.index({ email: 1 });
+resumeSchema.index({ userId: 1, uploadDate: -1 });
 
 module.exports = mongoose.model('Resume', resumeSchema);

@@ -48,6 +48,12 @@ const uploadResume = async (req, res, next) => {
     const resumeData = parseResult.data;
     console.log('✅ Parse successful:', resumeData);
 
+    // userId sent from frontend localStorage — required for per-user history
+    const userId = req.body.userId;
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId is required' });
+    }
+
     // Save to database
     const resume = new Resume({
       name: resumeData.name,
@@ -56,7 +62,8 @@ const uploadResume = async (req, res, next) => {
       role: resumeData.role,
       summary: resumeData.summary,
       education: resumeData.education,
-      fileName: req.file.originalname
+      fileName: req.file.originalname,
+      userId
     });
 
     await resume.save();
@@ -94,13 +101,21 @@ const getResumeHistory = async (req, res, next) => {
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    const resumes = await Resume.find()
+    // Filter history to only this user's resumes
+    const userId = req.query.userId;
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'userId is required' });
+    }
+
+    const filter = { userId };
+
+    const resumes = await Resume.find(filter)
       .select('name email role uploadDate fileName')
       .sort({ uploadDate: -1 })
       .skip(skip)
       .limit(limit);
 
-    const total = await Resume.countDocuments();
+    const total = await Resume.countDocuments(filter);
 
     res.status(200).json({
       success: true,
